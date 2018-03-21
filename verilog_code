@@ -1,0 +1,749 @@
+/*-------------------------------------------------------------------------
+ NAO AES (128-bit, composite field S-box, encryption)
+
+ File name   : aes_composite_enc.v
+ Version     : 1.0
+ Created     : JUN/12/2012
+ Last update : JUN/22/2012
+ Desgined by : Toshihiro Katashita
+ 
+
+ Copyright (C) 2018 NTU Singapore
+ 
+ By using this code, you agree to the following terms and conditions.
+ 
+ This code is copyrighted by AIST ("us").
+ 
+ Permission is hereby granted to copy, reproduce, redistribute or
+ otherwise use this code as long as: there is no monetary profit gained
+ specifically from the use or reproduction of this code, it is not sold,
+ rented, traded or otherwise marketed, and this copyright notice is
+ included prominently in any copy made.
+ 
+ We shall not be liable for any damages, including without limitation
+ direct, indirect, incidental, special or consequential damages arising
+ from the use of this code.
+ 
+ When you publish any results arising from the use of this code, we will
+ appreciate it if you can cite our team.
+ (Ali Akbar Pammu & Kwen-Sioang Chong : Singapore )
+ -------------------------------------------------------------------------*/
+
+ module AES_Composite_enc
+  (Kin, Din, Dout, Krdy, Drdy, Kvld, Dvld, EN, BSY, CLK, RSTn, sel);
+
+   //------------------------------------------------
+   input  [127:0] Kin;  // Key input
+   input [127:0]  Din;  // Data input
+   output [127:0] Dout; // Data output
+   input          Krdy; // Key input ready
+   input          Drdy; // Data input ready
+   output         Kvld; // Data output valid
+   output         Dvld; // Data output valid
+
+   input          EN;   // AES circuit enable
+   output         BSY, sel;  // Busy signal
+   input          CLK;  // System clock
+   input          RSTn; // Reset (Low active)
+
+
+wire sel;
+reg [127:0] Kin1;
+reg Krdy1;
+wire Krdy2;
+
+always @(posedge CLK or negedge RSTn)
+  if (!RSTn) begin
+        Kin1  <= #1 0;
+		  Krdy1 <= #1 0;
+		end
+  else if (Krdy) begin  
+             Kin1 <=  #1 Kin;
+				 Krdy1 <= #1 1;
+				end
+        else
+             Krdy1 <= #1 0;		  
+        
+assign Krdy2 = Krdy1 | Drdy; 
+AES_Composite_enc1 U1 (.Kin(Kin1), .Din(Din), .Dout(Dout), .KDrdy(Krdy2), .Kvld(Kvld), .Dvld(Dvld), .EN(EN), .BSY(BSY), .CLK(CLK), .RSTn(RSTn), .sel(sel));
+
+endmodule
+//================================================ AES_Composite_enc
+
+//================================================ NanoAES
+module AES_Composite_enc1 
+  (//inputs
+   CLK, RSTn, EN, Kin, Din, KDrdy,     
+   //outputs
+   Dout, Kvld, Dvld, BSY, sel);
+
+   //--Inputs declaration 
+   input          CLK;   // System clock
+   input          RSTn;  // Reset (Low active)
+   input          EN;    // AES circuit enable
+   input  [127:0] Kin;   // Key input
+   input  [127:0] Din;   // Data input
+   input          KDrdy; // Key-Data input ready
+
+   //--Outputs declaration 
+   output [127:0] Dout;  // Data output
+   output         Kvld;  // Key  output valid
+   output         Dvld;  // Data output valid 
+   output         BSY, sel;   // Busy signal
+ 
+   //--Output signals declaration   
+   wire  [127:0]  Dout;
+   reg            Dvld;   // Output Data valid
+   reg            Kvld;   // Key data valid
+   reg            BSY;    // Busy signal
+
+   //--Intermediate register signals declartion
+   reg [127:0]    rkeyIn; // Resister to store Key
+   reg [3:0]      dcnt;   // Counter
+   reg [7:0]      rcon;   // Key Expansion Counter
+   reg            sel;    // Indicate AES core and KeyExpansion       
+   reg [4:0]      SB_Count;
+   reg [7:0]      rkey_SB0, rkey_SB1, rkey_SB2, rkey_SB3;
+   
+  //--Intermediate wire signals declartion          
+   wire [127:0]   dat_next; 
+   wire [127:0]   dat;
+   wire           rst;
+   wire [  7:0]   SB_out;      
+   wire [ 31:0]   wr;
+   wire [ 31:0]   mcd; 
+   wire           RT;
+   wire           SB_0,  SB_1,  SB_2,  SB_3;
+   wire           SB_4,  SB_5,  SB_6,  SB_7;
+   wire           SB_8,  SB_9,  SB_10, SB_11;
+   wire           SB_12, SB_13, SB_14, SB_15;
+   wire           SB_16, SB_17, SB_18, SB_19;
+   wire           SB_20, SB_21;
+
+   wire           TR0,  TR1,  TR2,  TR3;
+   wire           TR4,  TR5,  TR6,  TR7;
+   wire           TR8,  TR9,  TR10, TR11;
+   wire           TR12, TR13, TR14, TR15;
+   wire           dcnt11, MCT;
+   //------------------------------------------------
+
+   //--General Glue Logic
+   assign rst       = ~RSTn;
+   assign wr        = {(rkey_SB3 ^ rcon), {rkey_SB2, rkey_SB1, rkey_SB0}}; //For Key Expansion
+   //   assign Dout      = dat;
+
+  assign Dout      = {dat[127:120],dat[23:16],dat[ 47: 40],dat[71:64],dat[95:88],dat[119:112],dat[15: 8],dat[ 39:32],
+                      dat[ 63: 56],dat[87:80],dat[111:104],dat[ 7: 0],dat[31:24],dat[ 55: 48],dat[79:72],dat[103:96]};  
+   
+   //--Trigger/Control signals 
+   assign RT    = (dcnt != 1);
+
+   assign SB_0  = (SB_Count == 0);
+   assign SB_1  = (SB_Count == 1);
+   assign SB_2  = (SB_Count == 2);
+   assign SB_3  = (SB_Count == 3);
+   assign SB_4  = (SB_Count == 4);
+   assign SB_5  = (SB_Count == 5);
+   assign SB_6  = (SB_Count == 6);
+   assign SB_7  = (SB_Count == 7);
+   assign SB_8  = (SB_Count == 8);
+   assign SB_9  = (SB_Count == 9);
+   assign SB_10 = (SB_Count == 10);
+   assign SB_11 = (SB_Count == 11);
+   assign SB_12 = (SB_Count == 12);
+   assign SB_13 = (SB_Count == 13);
+   assign SB_14 = (SB_Count == 14);
+   assign SB_15 = (SB_Count == 15);
+   assign SB_16 = (SB_Count == 16);
+   assign SB_17 = (SB_Count == 17);
+   assign SB_18 = (SB_Count == 18);
+   assign SB_19 = (SB_Count == 19);
+   assign SB_20 = (SB_Count == 20);
+   assign SB_21 = (SB_Count == 21);
+
+   assign TR0  = (RT & SB_0);
+   assign TR1  = (RT & SB_1);
+   assign TR2  = (RT & SB_2);
+   assign TR3  = (RT & SB_3);
+   assign TR4  = (RT & SB_4);
+   assign TR5  = (RT & SB_5);
+   assign TR6  = (RT & SB_6);
+   assign TR7  = (RT & SB_7);
+   assign TR8  = (RT & SB_8);
+   assign TR9  = (RT & SB_9);
+   assign TR10 = (RT & SB_10);
+   assign TR11 = (RT & SB_11);
+   assign TR12 = (RT & SB_12);
+   assign TR13 = (RT & SB_13);
+   assign TR14 = (RT & SB_14);
+   assign TR15 = (RT & SB_15);
+
+   assign dcnt11 = (dcnt == 11);
+   assign MCT    = (SB_16 | SB_17 | SB_18 | SB_19) & (dcnt != 1) & (dcnt != 11);
+   //----------------------------------
+    
+   always @(posedge CLK or posedge rst) begin
+      if (rst)     
+          Dvld <= #1 0;
+      else if (EN) 
+               if (dcnt11 & (SB_20)) 
+                    Dvld <= #1 1;
+               else 
+                    Dvld <= #1 0;
+   end
+
+   always @(posedge CLK or posedge rst) begin
+      if (rst) 
+          Kvld <= #1 0;
+      else if (EN) 
+              if (KDrdy) 
+                  Kvld <= #1 1;
+              else 
+                  Kvld <= #1 0;              
+   end
+
+   always @(posedge CLK or posedge rst) begin
+      if (rst) 
+          BSY <= #1 0;
+      else if (EN) 
+               if (KDrdy)
+                   BSY <= #1 1;
+               else if ((dcnt11) & (SB_21))
+                        BSY <= #1 0;
+                    else
+                        BSY <= #1 BSY;
+   end
+      
+   Prog_SubBytes Prog_SB (.S(SB_Count), .x(dat), .k({rkeyIn[23:16], rkeyIn[15:8], rkeyIn[7:0], rkeyIn[31:24]}), .y(SB_out));
+
+   AES_Core_wo_SBox Core (.din(dat), .mcdin(dat[127:96]), .kin(rkeyIn), .sel(sel), .wr(wr), .mcdout(mcd), .dout(dat_next));
+ 
+   //-- Sub-byte Counter - to control the SBox computations
+   always @(posedge CLK or posedge rst) begin
+      if (rst) 
+          SB_Count <= #1 31;
+      else if (KDrdy)
+               SB_Count <= #1 0;
+           else if (dcnt11 && SB_21)  
+                    SB_Count <= #1 31;
+                else if ((dcnt < 11) && (SB_21))
+                         SB_Count <= #1 0;    
+                     else if (SB_Count < 21)
+                         SB_Count <= #1 SB_Count + 1'b1;    
+   end   
+
+   //-- Round Counter - to control the round of AES operation
+   always @(posedge CLK or posedge rst) begin
+      if (rst)  
+          dcnt <= #1 4'hf;                                 
+      else if (EN)  
+              if (KDrdy) 
+                  dcnt <= #1 1;  
+              else if ((dcnt < 11) && (SB_21))
+                        dcnt <= #1 dcnt + 1'b1;
+                   else if (dcnt11 && SB_21)
+                            dcnt <= #1 4'hf;       
+   end
+ 
+   //-- Indicate the first, mid, final round computation and key expansion
+   always @(posedge CLK or posedge rst) begin 
+      if (rst)     
+          sel <= #1 1;
+      else if (EN) 
+               if (SB_20)
+                   sel <= #1 0;
+               else
+                   sel <= #1 1; 
+   end
+
+   //--Critical Data Flip-flops; Inputs are shift-rowed   
+   Input_Regs IR15 (.CLK(CLK), .Din(Din[127:120]), .SB_out(SB_out), .MCdata(dat[95:88]), .dat_next(dat_next[127:120]), 
+                               .EN(KDrdy),         .TR(TR15),       .MC(MCT),            .Rdy(SB_20),                 .dat(dat[127:120]));
+   Input_Regs IR14 (.CLK(CLK), .Din(Din[119:112]), .SB_out(SB_out), .MCdata(dat[87:80]), .dat_next(dat_next[ 87: 80]), 
+                               .EN(KDrdy),         .TR(TR14),       .MC(MCT),            .Rdy(SB_20),                 .dat(dat[119:112]));
+   Input_Regs IR13 (.CLK(CLK), .Din(Din[111:104]), .SB_out(SB_out), .MCdata(dat[79:72]), .dat_next(dat_next[ 47: 40]), 
+                               .EN(KDrdy),         .TR(TR13),       .MC(MCT),            .Rdy(SB_20),                 .dat(dat[111:104]));
+   Input_Regs IR12 (.CLK(CLK), .Din(Din[103: 96]), .SB_out(SB_out), .MCdata(dat[71:64]), .dat_next(dat_next[  7:  0]), 
+                               .EN(KDrdy),         .TR(TR12),       .MC(MCT),            .Rdy(SB_20),                 .dat(dat[103: 96]));
+
+   Input_Regs IR11 (.CLK(CLK), .Din(Din[ 95: 88]), .SB_out(SB_out), .MCdata(dat[63:56]), .dat_next(dat_next[ 95: 88]), 
+                               .EN(KDrdy),         .TR(TR11),       .MC(MCT),            .Rdy(SB_20),                 .dat(dat[95:88]));
+   Input_Regs IR10 (.CLK(CLK), .Din(Din[ 87: 80]), .SB_out(SB_out), .MCdata(dat[55:48]), .dat_next(dat_next[ 55: 48]), 
+                               .EN(KDrdy),         .TR(TR10),       .MC(MCT),            .Rdy(SB_20),                 .dat(dat[87:80]));
+   Input_Regs IR9  (.CLK(CLK), .Din(Din[ 79: 72]), .SB_out(SB_out), .MCdata(dat[47:40]), .dat_next(dat_next[ 15:  8]), 
+                               .EN(KDrdy),         .TR(TR9),        .MC(MCT),            .Rdy(SB_20),                 .dat(dat[79:72]));
+   Input_Regs IR8  (.CLK(CLK), .Din(Din[ 71: 64]), .SB_out(SB_out), .MCdata(dat[39:32]), .dat_next(dat_next[103: 96]), 
+                               .EN(KDrdy),         .TR(TR8),        .MC(MCT),            .Rdy(SB_20),                 .dat(dat[71:64]));
+
+   Input_Regs IR7  (.CLK(CLK), .Din(Din[ 63: 56]), .SB_out(SB_out), .MCdata(dat[31:24]), .dat_next(dat_next[ 63: 56]), 
+                               .EN(KDrdy),         .TR(TR7),        .MC(MCT),            .Rdy(SB_20),                 .dat(dat[63:56]));
+   Input_Regs IR6  (.CLK(CLK), .Din(Din[ 55: 48]), .SB_out(SB_out), .MCdata(dat[23:16]), .dat_next(dat_next[ 23: 16]), 
+                               .EN(KDrdy),         .TR(TR6),        .MC(MCT),            .Rdy(SB_20),                 .dat(dat[55:48]));
+   Input_Regs IR5  (.CLK(CLK), .Din(Din[ 47: 40]), .SB_out(SB_out), .MCdata(dat[15: 8]), .dat_next(dat_next[111:104]), 
+                               .EN(KDrdy),         .TR(TR5),        .MC(MCT),            .Rdy(SB_20),                 .dat(dat[47:40]));
+   Input_Regs IR4  (.CLK(CLK), .Din(Din[ 39: 32]), .SB_out(SB_out), .MCdata(dat[ 7: 0]), .dat_next(dat_next[ 71: 64]), 
+                               .EN(KDrdy),         .TR(TR4),        .MC(MCT),            .Rdy(SB_20),                 .dat(dat[39:32]));
+  
+   Input_Regs IR3  (.CLK(CLK), .Din(Din[ 31: 24]), .SB_out(SB_out), .MCdata(mcd[31:24]), .dat_next(dat_next[ 31: 24]), 
+                               .EN(KDrdy),         .TR(TR3),        .MC(MCT),            .Rdy(SB_20),                 .dat(dat[31:24]));
+   Input_Regs IR2  (.CLK(CLK), .Din(Din[ 23: 16]), .SB_out(SB_out), .MCdata(mcd[23:16]), .dat_next(dat_next[119:112]), 
+                               .EN(KDrdy),         .TR(TR2),        .MC(MCT),            .Rdy(SB_20),                 .dat(dat[23:16]));
+   Input_Regs IR1  (.CLK(CLK), .Din(Din[ 15:  8]), .SB_out(SB_out), .MCdata(mcd[15: 8]), .dat_next(dat_next[ 79: 72]), 
+                               .EN(KDrdy),         .TR(TR1),        .MC(MCT),            .Rdy(SB_20),                 .dat(dat[15: 8]));
+   Input_Regs IR0  (.CLK(CLK), .Din(Din[  7:  0]), .SB_out(SB_out), .MCdata(mcd[ 7: 0]), .dat_next(dat_next[ 39: 32]), 
+                               .EN(KDrdy),         .TR(TR0),        .MC(MCT),            .Rdy(SB_20),                 .dat(dat[ 7: 0]));
+    
+   //-- Critical Key Flip-flops    
+   always @(posedge CLK) begin
+     if (EN)  
+         if (KDrdy)                             
+             rkeyIn[127:0] <= #1 Kin[127:0];          
+         else if ((dcnt < 12) && (SB_21))
+                  rkeyIn[127:0] <= #1 dat_next[127:0];                 
+   end
+
+   //Critical SubByte Key Flip-flops    
+   always @(posedge CLK) 
+     if (EN)  
+         if (SB_16) rkey_SB0 <= #1 SB_out;                     
+
+   always @(posedge CLK) 
+     if (EN)  
+         if (SB_17) rkey_SB1 <= #1 SB_out;                     
+
+   always @(posedge CLK) 
+     if (EN)  
+         if (SB_18) rkey_SB2 <= #1 SB_out;                     
+
+   always @(posedge CLK) 
+     if (EN)  
+         if (SB_19) rkey_SB3 <= #1 SB_out;   
+     
+  //------------------------
+  always @(posedge CLK or posedge rst)
+    if (rst)
+        begin
+          rcon <= #1 8'h01;
+	    end	
+    else if (EN)
+             if ((dcnt < 11) && (SB_21))
+		         begin
+		           rcon <= #1 frcon(dcnt);
+			     end		   
+		     else if ((dcnt == 11) && (SB_21))
+			     begin
+                   rcon <= #1 1;
+			     end
+
+function [7:0]	frcon;
+input	[3:0]	i;
+case(i)	// synopsys parallel_case
+   4'h0: frcon=8'h01;
+   4'h1: frcon=8'h02;
+   4'h2: frcon=8'h04;
+   4'h3: frcon=8'h08;
+   4'h4: frcon=8'h10;
+   4'h5: frcon=8'h20;
+   4'h6: frcon=8'h40;
+   4'h7: frcon=8'h80;
+   4'h8: frcon=8'h1b;
+   4'h9: frcon=8'h36;
+   default: frcon=8'h01;
+endcase
+endfunction
+
+endmodule // AES_Composite_enc
+
+//== Input Registers
+module Input_Regs (//inputs
+                   CLK,                    
+                   Din,
+                   SB_out,
+                   MCdata,
+                   dat_next,                    
+                   EN,
+                   TR,
+                   MC,                      
+                   Rdy,
+                   //outputs
+                   dat);
+
+input       CLK; 
+input [7:0] Din;
+input [7:0] SB_out;
+input [7:0] MCdata;
+input [7:0] dat_next; 
+input       EN; 
+input       TR;
+input       MC;
+input       Rdy;            
+
+output [7:0] dat;
+reg    [7:0] dat;
+
+  always @ (posedge CLK)
+    if (EN)            
+        dat <= #1 Din;
+    else if (TR)
+             dat <= #1 SB_out;
+         else if (MC)
+                  dat <= #1 MCdata;
+              else if (Rdy)
+                       dat <= #1 dat_next;
+
+endmodule
+
+//== AES_Core without Subbyte
+module AES_Core_wo_SBox 
+  (//inputs
+   din, mcdin, kin, sel, wr, 
+   //outputs
+   mcdout, dout);
+
+   //------------------------------------------------
+   input  [127:0] din;    // data
+   input  [ 31:0] mcdin;  // mix column input data
+   input  [127:0] kin;    // key
+   input          sel;    // 1: For 0th round to last round; 0: For Key Expansion
+   input  [ 31:0] wr;     // For key expansion
+   output [ 31:0] mcdout; // For mix column output
+   output [127:0] dout;   // output
+   
+   //------------------------------------------------
+   wire [31:0] sk0, sk1, sk2, sk3; // AddRoundKey
+   wire [31:0] mcdout;
+
+   // MixColumns
+   MixColumns MC0 (mcdin, mcdout);
+             
+   // AddRoundKey -- 1: For 0th round to last round; 0: For Key Expansion 
+   assign sk3 = (sel == 1) ? din[127:96] : wr;
+   assign sk2 = (sel == 1) ? din[ 95:64] : dout[127:96];
+   assign sk1 = (sel == 1) ? din[ 63:32] : dout[ 95:64];
+   assign sk0 = (sel == 1) ? din[ 31: 0] : dout[ 63:32];
+
+   assign dout = kin ^ {sk3, sk2, sk1, sk0}; 
+
+endmodule // AES_Core_wo_SBox
+
+//================================================ MixColumns
+module MixColumns(x, y);
+
+   //------------------------------------------------
+   input  [31:0]  x;
+   output [31:0]  y;
+
+   //------------------------------------------------
+   wire [7:0]    a0, a1, a2, a3;
+   wire [7:0]    b0, b1, b2, b3;
+
+   assign a0 = x[31:24];
+   assign a1 = x[23:16];
+   assign a2 = x[15: 8];
+   assign a3 = x[ 7: 0];
+
+   assign b0 = xtime(a0);
+   assign b1 = xtime(a1);
+   assign b2 = xtime(a2);
+   assign b3 = xtime(a3);
+
+   assign y[31:24] =    b0 ^ a1^b1 ^ a2    ^ a3;
+   assign y[23:16] = a0        ^b1 ^ a2^b2 ^ a3;
+   assign y[15: 8] = a0    ^ a1        ^b2 ^ a3^b3;
+   assign y[ 7: 0] = a0^b0 ^ a1    ^ a2        ^b3;
+  
+   function [7:0] xtime;
+      input [7:0] x;
+      xtime = (x[7]==1'b0)? {x[6:0],1'b0} : {x[6:0],1'b0} ^ 8'h1B;
+   endfunction
+   
+endmodule // MixColumns
+
+module Prog_SubBytes(S, x, k, y);
+
+input  [  4:0] S; //select signals
+input  [127:0] x; //data
+input  [ 31:0] k; //keys
+output [ 7:0]  y; //output
+
+wire [7:0] xI;
+
+assign xI = (S ==  0) ? x[  7:  0] : (S ==  1) ? x[ 15:  8] : (S ==  2) ? x[ 23: 16] : (S ==  3) ? x[ 31: 24] : 
+            (S ==  4) ? x[ 39: 32] : (S ==  5) ? x[ 47: 40] : (S ==  6) ? x[ 55: 48] : (S ==  7) ? x[ 63: 56] : 
+            (S ==  8) ? x[ 71: 64] : (S ==  9) ? x[ 79: 72] : (S == 10) ? x[ 87: 80] : (S == 11) ? x[ 95: 88] :              
+            (S == 12) ? x[103: 96] : (S == 13) ? x[111:104] : (S == 14) ? x[119:112] : (S == 15) ? x[127:120] :
+            (S == 16) ? k[  7:  0] : (S == 17) ? k[ 15:  8] : (S == 18) ? k[ 23: 16] : (S == 19) ? k[ 31: 24] : 0;                
+
+SubB U1 (.A(xI),   .y(y));
+
+endmodule 
+ 
+module SubB (A, y);
+				  
+input  [7:0] A;
+output reg [7:0] y;
+
+   //------------------------------------------------
+
+	always @(A)  
+		case(A[7:0]) // synopsys parallel_case
+8'd0:y[7:0]=8'd99;
+8'd1:y[7:0]=8'd124;
+8'd2:y[7:0]=8'd119;
+8'd3:y[7:0]=8'd123;
+8'd4:y[7:0]=8'd242;
+8'd5:y[7:0]=8'd107;
+8'd6:y[7:0]=8'd111;
+8'd7:y[7:0]=8'd197;
+8'd8:y[7:0]=8'd48;
+8'd9:y[7:0]=8'd1;
+8'd10:y[7:0]=8'd103;
+8'd11:y[7:0]=8'd43;
+8'd12:y[7:0]=8'd254;
+8'd13:y[7:0]=8'd215;
+8'd14:y[7:0]=8'd171;
+8'd15:y[7:0]=8'd118;
+8'd16:y[7:0]=8'd202;
+8'd17:y[7:0]=8'd130;
+8'd18:y[7:0]=8'd201;
+8'd19:y[7:0]=8'd125;
+8'd20:y[7:0]=8'd250;
+8'd21:y[7:0]=8'd89;
+8'd22:y[7:0]=8'd71;
+8'd23:y[7:0]=8'd240;
+8'd24:y[7:0]=8'd173;
+8'd25:y[7:0]=8'd212;
+8'd26:y[7:0]=8'd162;
+8'd27:y[7:0]=8'd175;
+8'd28:y[7:0]=8'd156;
+8'd29:y[7:0]=8'd164;
+8'd30:y[7:0]=8'd114;
+8'd31:y[7:0]=8'd192;
+8'd32:y[7:0]=8'd183;
+8'd33:y[7:0]=8'd253;
+8'd34:y[7:0]=8'd147;
+8'd35:y[7:0]=8'd38;
+8'd36:y[7:0]=8'd54;
+8'd37:y[7:0]=8'd63;
+8'd38:y[7:0]=8'd247;
+8'd39:y[7:0]=8'd204;
+8'd40:y[7:0]=8'd52;
+8'd41:y[7:0]=8'd165;
+8'd42:y[7:0]=8'd229;
+8'd43:y[7:0]=8'd241;
+8'd44:y[7:0]=8'd113;
+8'd45:y[7:0]=8'd216;
+8'd46:y[7:0]=8'd49;
+8'd47:y[7:0]=8'd21;
+8'd48:y[7:0]=8'd4;
+8'd49:y[7:0]=8'd199;
+8'd50:y[7:0]=8'd35;
+8'd51:y[7:0]=8'd195;
+8'd52:y[7:0]=8'd24;
+8'd53:y[7:0]=8'd150;
+8'd54:y[7:0]=8'd5;
+8'd55:y[7:0]=8'd154;
+8'd56:y[7:0]=8'd7;
+8'd57:y[7:0]=8'd18;
+8'd58:y[7:0]=8'd128;
+8'd59:y[7:0]=8'd226;
+8'd60:y[7:0]=8'd235;
+8'd61:y[7:0]=8'd39;
+8'd62:y[7:0]=8'd178;
+8'd63:y[7:0]=8'd117;
+8'd64:y[7:0]=8'd9;
+8'd65:y[7:0]=8'd131;
+8'd66:y[7:0]=8'd44;
+8'd67:y[7:0]=8'd26;
+8'd68:y[7:0]=8'd27;
+8'd69:y[7:0]=8'd110;
+8'd70:y[7:0]=8'd90;
+8'd71:y[7:0]=8'd160;
+8'd72:y[7:0]=8'd82;
+8'd73:y[7:0]=8'd59;
+8'd74:y[7:0]=8'd214;
+8'd75:y[7:0]=8'd179;
+8'd76:y[7:0]=8'd41;
+8'd77:y[7:0]=8'd227;
+8'd78:y[7:0]=8'd47;
+8'd79:y[7:0]=8'd132;
+8'd80:y[7:0]=8'd83;
+8'd81:y[7:0]=8'd209;
+8'd82:y[7:0]=8'd0;
+8'd83:y[7:0]=8'd237;
+8'd84:y[7:0]=8'd32;
+8'd85:y[7:0]=8'd252;
+8'd86:y[7:0]=8'd177;
+8'd87:y[7:0]=8'd91;
+8'd88:y[7:0]=8'd106;
+8'd89:y[7:0]=8'd203;
+8'd90:y[7:0]=8'd190;
+8'd91:y[7:0]=8'd57;
+8'd92:y[7:0]=8'd74;
+8'd93:y[7:0]=8'd76;
+8'd94:y[7:0]=8'd88;
+8'd95:y[7:0]=8'd207;
+8'd96:y[7:0]=8'd208;
+8'd97:y[7:0]=8'd239;
+8'd98:y[7:0]=8'd170;
+8'd99:y[7:0]=8'd251;
+8'd100:y[7:0]=8'd67;
+8'd101:y[7:0]=8'd77;
+8'd102:y[7:0]=8'd51;
+8'd103:y[7:0]=8'd133;
+8'd104:y[7:0]=8'd69;
+8'd105:y[7:0]=8'd249;
+8'd106:y[7:0]=8'd2;
+8'd107:y[7:0]=8'd127;
+8'd108:y[7:0]=8'd80;
+8'd109:y[7:0]=8'd60;
+8'd110:y[7:0]=8'd159;
+8'd111:y[7:0]=8'd168;
+8'd112:y[7:0]=8'd81;
+8'd113:y[7:0]=8'd163;
+8'd114:y[7:0]=8'd64;
+8'd115:y[7:0]=8'd143;
+8'd116:y[7:0]=8'd146;
+8'd117:y[7:0]=8'd157;
+8'd118:y[7:0]=8'd56;
+8'd119:y[7:0]=8'd245;
+8'd120:y[7:0]=8'd188;
+8'd121:y[7:0]=8'd182;
+8'd122:y[7:0]=8'd218;
+8'd123:y[7:0]=8'd33;
+8'd124:y[7:0]=8'd16;
+8'd125:y[7:0]=8'd255;
+8'd126:y[7:0]=8'd243;
+8'd127:y[7:0]=8'd210;
+8'd128:y[7:0]=8'd205;
+8'd129:y[7:0]=8'd12;
+8'd130:y[7:0]=8'd19;
+8'd131:y[7:0]=8'd236;
+8'd132:y[7:0]=8'd95;
+8'd133:y[7:0]=8'd151;
+8'd134:y[7:0]=8'd68;
+8'd135:y[7:0]=8'd23;
+8'd136:y[7:0]=8'd196;
+8'd137:y[7:0]=8'd167;
+8'd138:y[7:0]=8'd126;
+8'd139:y[7:0]=8'd61;
+8'd140:y[7:0]=8'd100;
+8'd141:y[7:0]=8'd93;
+8'd142:y[7:0]=8'd25;
+8'd143:y[7:0]=8'd115;
+8'd144:y[7:0]=8'd96;
+8'd145:y[7:0]=8'd129;
+8'd146:y[7:0]=8'd79;
+8'd147:y[7:0]=8'd220;
+8'd148:y[7:0]=8'd34;
+8'd149:y[7:0]=8'd42;
+8'd150:y[7:0]=8'd144;
+8'd151:y[7:0]=8'd136;
+8'd152:y[7:0]=8'd70;
+8'd153:y[7:0]=8'd238;
+8'd154:y[7:0]=8'd184;
+8'd155:y[7:0]=8'd20;
+8'd156:y[7:0]=8'd222;
+8'd157:y[7:0]=8'd94;
+8'd158:y[7:0]=8'd11;
+8'd159:y[7:0]=8'd219;
+8'd160:y[7:0]=8'd224;
+8'd161:y[7:0]=8'd50;
+8'd162:y[7:0]=8'd58;
+8'd163:y[7:0]=8'd10;
+8'd164:y[7:0]=8'd73;
+8'd165:y[7:0]=8'd6;
+8'd166:y[7:0]=8'd36;
+8'd167:y[7:0]=8'd92;
+8'd168:y[7:0]=8'd194;
+8'd169:y[7:0]=8'd211;
+8'd170:y[7:0]=8'd172;
+8'd171:y[7:0]=8'd98;
+8'd172:y[7:0]=8'd145;
+8'd173:y[7:0]=8'd149;
+8'd174:y[7:0]=8'd228;
+8'd175:y[7:0]=8'd121;
+8'd176:y[7:0]=8'd231;
+8'd177:y[7:0]=8'd200;
+8'd178:y[7:0]=8'd55;
+8'd179:y[7:0]=8'd109;
+8'd180:y[7:0]=8'd141;
+8'd181:y[7:0]=8'd213;
+8'd182:y[7:0]=8'd78;
+8'd183:y[7:0]=8'd169;
+8'd184:y[7:0]=8'd108;
+8'd185:y[7:0]=8'd86;
+8'd186:y[7:0]=8'd244;
+8'd187:y[7:0]=8'd234;
+8'd188:y[7:0]=8'd101;
+8'd189:y[7:0]=8'd122;
+8'd190:y[7:0]=8'd174;
+8'd191:y[7:0]=8'd8;
+8'd192:y[7:0]=8'd186;
+8'd193:y[7:0]=8'd120;
+8'd194:y[7:0]=8'd37;
+8'd195:y[7:0]=8'd46;
+8'd196:y[7:0]=8'd28;
+8'd197:y[7:0]=8'd166;
+8'd198:y[7:0]=8'd180;
+8'd199:y[7:0]=8'd198;
+8'd200:y[7:0]=8'd232;
+8'd201:y[7:0]=8'd221;
+8'd202:y[7:0]=8'd116;
+8'd203:y[7:0]=8'd31;
+8'd204:y[7:0]=8'd75;
+8'd205:y[7:0]=8'd189;
+8'd206:y[7:0]=8'd139;
+8'd207:y[7:0]=8'd138;
+8'd208:y[7:0]=8'd112;
+8'd209:y[7:0]=8'd62;
+8'd210:y[7:0]=8'd181;
+8'd211:y[7:0]=8'd102;
+8'd212:y[7:0]=8'd72;
+8'd213:y[7:0]=8'd3;
+8'd214:y[7:0]=8'd246;
+8'd215:y[7:0]=8'd14;
+8'd216:y[7:0]=8'd97;
+8'd217:y[7:0]=8'd53;
+8'd218:y[7:0]=8'd87;
+8'd219:y[7:0]=8'd185;
+8'd220:y[7:0]=8'd134;
+8'd221:y[7:0]=8'd193;
+8'd222:y[7:0]=8'd29;
+8'd223:y[7:0]=8'd158;
+8'd224:y[7:0]=8'd225;
+8'd225:y[7:0]=8'd248;
+8'd226:y[7:0]=8'd152;
+8'd227:y[7:0]=8'd17;
+8'd228:y[7:0]=8'd105;
+8'd229:y[7:0]=8'd217;
+8'd230:y[7:0]=8'd142;
+8'd231:y[7:0]=8'd148;
+8'd232:y[7:0]=8'd155;
+8'd233:y[7:0]=8'd30;
+8'd234:y[7:0]=8'd135;
+8'd235:y[7:0]=8'd233;
+8'd236:y[7:0]=8'd206;
+8'd237:y[7:0]=8'd85;
+8'd238:y[7:0]=8'd40;
+8'd239:y[7:0]=8'd223;
+8'd240:y[7:0]=8'd140;
+8'd241:y[7:0]=8'd161;
+8'd242:y[7:0]=8'd137;
+8'd243:y[7:0]=8'd13;
+8'd244:y[7:0]=8'd191;
+8'd245:y[7:0]=8'd230;
+8'd246:y[7:0]=8'd66;
+8'd247:y[7:0]=8'd104;
+8'd248:y[7:0]=8'd65;
+8'd249:y[7:0]=8'd153;
+8'd250:y[7:0]=8'd45;
+8'd251:y[7:0]=8'd15;
+8'd252:y[7:0]=8'd176;
+8'd253:y[7:0]=8'd84;
+8'd254:y[7:0]=8'd187;
+8'd255:y[7:0]=8'd22;			
+			default : y[7:0] = 8'd00;
+			endcase
+
+endmodule
